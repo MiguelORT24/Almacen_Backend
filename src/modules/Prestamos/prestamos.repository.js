@@ -33,7 +33,15 @@ export async function existsHerramienta(id) {
   return count > 0;
 }
 
-export async function existsPrestamoActivoByHerramienta(idHerramienta, excludeId = null) {
+export async function getCantidadHerramienta(idHerramienta) {
+  const herramienta = await prisma.herramientas.findUnique({
+    where: { id: idHerramienta },
+    select: { cantidad: true },
+  });
+  return herramienta?.cantidad ?? 0;
+}
+
+export async function getCantidadPrestadaActiva(idHerramienta, excludeId = null) {
   const where = {
     id_herramienta: idHerramienta,
     fecha_devolucion_real: null,
@@ -42,8 +50,11 @@ export async function existsPrestamoActivoByHerramienta(idHerramienta, excludeId
 
   if (excludeId !== null) where.id = { not: excludeId };
 
-  const count = await prisma.prestamos.count({ where });
-  return count > 0;
+  const result = await prisma.prestamos.aggregate({
+    where,
+    _sum: { cantidad: true },
+  });
+  return result._sum.cantidad ?? 0;
 }
 
 export async function create(data) {

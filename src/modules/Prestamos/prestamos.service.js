@@ -31,16 +31,21 @@ async function validarRelaciones(data, excludePrestamoId = null) {
       throw err;
     }
 
-    // Evita dos préstamos activos para la misma herramienta.
+    // Valida disponibilidad por stock.
     const estadoNormalizado = String(data.estado ?? "activo").toLowerCase();
     const seraActivo = !data.fecha_devolucion_real && estadoNormalizado !== "devuelto";
     if (seraActivo) {
-      const activo = await repo.existsPrestamoActivoByHerramienta(
+      const cantidadTotal = await repo.getCantidadHerramienta(data.id_herramienta);
+      const cantidadPrestada = await repo.getCantidadPrestadaActiva(
         data.id_herramienta,
         excludePrestamoId
       );
-      if (activo) {
-        const err = new Error("La herramienta ya tiene un préstamo activo");
+      const cantidadDisponible = cantidadTotal - cantidadPrestada;
+      const cantidadSolicitada = data.cantidad ?? 1;
+      if (cantidadSolicitada > cantidadDisponible) {
+        const err = new Error(
+          `Stock insuficiente. Disponibles: ${cantidadDisponible}, solicitadas: ${cantidadSolicitada}.`
+        );
         err.status = 409;
         throw err;
       }
@@ -86,9 +91,14 @@ export async function create(rawDto) {
   const data = mapper.fromCreacionDto(parsed);
   const creado = await repo.create(data);
 
-  // Si nace como préstamo activo, marcamos herramienta como no disponible.
+  // Recalcula disponibilidad real basada en stock.
   if (!estaDevuelto(parsed) && parsed.id_herramienta) {
-    await repo.updateHerramientaDisponibilidad(parsed.id_herramienta, false);
+    const cantidadTotal = await repo.getCantidadHerramienta(parsed.id_herramienta);
+    const cantidadPrestada = await repo.getCantidadPrestadaActiva(parsed.id_herramienta);
+    await repo.updateHerramientaDisponibilidad(
+      parsed.id_herramienta,
+      cantidadPrestada < cantidadTotal
+    );
   }
 
   return mapper.toPrestamoDto(creado);
@@ -123,9 +133,13 @@ export async function update(id, rawDto) {
 
   const herramientaId = actualizado.id_herramienta;
   if (herramientaId) {
-    // Si el préstamo está devuelto, la herramienta queda disponible.
-    // Si sigue activo, se mantiene no disponible.
-    await repo.updateHerramientaDisponibilidad(herramientaId, estaDevuelto(actualizado));
+    // Recalcula disponibilidad real: disponible si al menos una unidad está libre.
+    const cantidadTotal = await repo.getCantidadHerramienta(herramientaId);
+    const cantidadPrestada = await repo.getCantidadPrestadaActiva(herramientaId);
+    await repo.updateHerramientaDisponibilidad(
+      herramientaId,
+      cantidadPrestada < cantidadTotal
+    );
   }
 
   return mapper.toPrestamoDto(actualizado);
